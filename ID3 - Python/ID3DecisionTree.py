@@ -12,7 +12,7 @@
 # Importamos las librerías necesarias
 import networkx as nx # Para el árbol
 import matplotlib.pyplot as plt # Para el plot
-import math
+import math # Para los logaritmos del mérito
 
 # Esto es una constante para un "engaño" que he tenido que llevar a cabo para el plot de los nodos
 global_counter = 0
@@ -54,7 +54,7 @@ def run_id3(attributes, examples, result_tree, key_positive, key_position:int, e
     # De ser todos iguales creamos un nodo con el valor obtenido
     if all_same:
         if not any(result_tree.has_edge(parent, node) and node == leaf_label for node in result_tree.successors(parent)):
-            # Le añadimos caracteres vacios alrededor para que mantengan el mismo display pero no se conecten los nodos
+            # Le añadimos caracteres vacíos alrededor para que mantengan el mismo display, pero no se conecten los nodos
             # La variable global sirve para evitar repeticiones futuras
             leaf_label = '‎'*global_counter+leaf_label+'‎'*global_counter
             global_counter += 1
@@ -67,23 +67,33 @@ def run_id3(attributes, examples, result_tree, key_positive, key_position:int, e
     summary_dict = get_attributes_probabilities(attributes=attributes, examples=examples, key_positive=key_positive,
                                                 key_position=key_position)
 
+    # Creamos una lista iterable que contiene todos los valores salvo el valor key
     iterable = [attr for i, attr in enumerate(summary_dict) if i != key_position]
+    # De ser key el único valor de la lista, devolvemos
     if not iterable:
         return
 
+    # Tomamos el atributo del diccionario con menor valor y sacamos su índice en la lista actual
     lower_merit_attribute = min(iterable, key=lambda attr: summary_dict[attr]['merit'])
     index = attributes.index(lower_merit_attribute)
+    # Añadimos el nodo al árbol
     result_tree.add_node(lower_merit_attribute)
 
+    # En caso de que no tenga ningún padre, edge name es None, entonces no se añade edge
     if edge_name is not None:
         result_tree.add_edge(parent, lower_merit_attribute)
         result_tree[parent][lower_merit_attribute]['name'] = edge_name
 
+    # Establecemos los nuevos atributos como todos los anteriores salvo aquel elegido
     new_attributes = [attr for i, attr in enumerate(attributes) if i != index]
+    # Actualizamos el key position
+    new_key_position = new_attributes.index(attributes[key_position])
     for option in summary_dict[lower_merit_attribute]['options']:
+        # Hacemos lo mismo con los ejemplos
         new_examples = [row[:index] + row[index+1:] for row in examples if row[index] == option]
+        # Y por cada ejemplo del tipo elegido, volvemos a calcular el id3
         run_id3(attributes=new_attributes, examples=new_examples, result_tree=result_tree,  key_positive=key_positive,
-                key_position=key_position-1, edge_name=option, parent=lower_merit_attribute)
+                key_position=new_key_position, edge_name=option, parent=lower_merit_attribute)
 
 # Método para saber si los elementos de la tabla tienen como atributo objetivo el mismo
 def get_all_same_sign(example, key_position):
@@ -124,34 +134,54 @@ def get_attributes_probabilities(attributes, examples, key_position:int, key_pos
     return result
 
 
+# Método que permite la visualización del árbol
 def show_tree(graph):
+    # Creamos una figura
     plt.figure(figsize=(10, 6))
+    # Establecemos la posición de los nodos y su forma circular (dot)
     pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")
+    # Mostramos los nodos
     nx.draw(graph, pos, with_labels=True, node_color="skyblue", node_size=3000, font_size=10, edge_color="gray")
+    # Etiquetamos los labels
     edge_labels = {(u, v): d['name'] for u, v, d in graph.edges(data=True)}
+    # Mostramos los labels
     nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_labels, font_size=9)
+    # Mostramos los valores
     plt.show()
 
-
-def ask_if_prediction_and_predict(index_names, variable_to_predict, built_tree):
+# Método que permite realizar predicciones en base a unos inputs
+def ask_if_prediction_and_predict(index_names, pos_of_variable_to_predict, built_tree, examples_names):
     print('*************************************************')
+    # Verificamos que el usuario quiera predecir algo
     make_predict = input('Deseas hacer una predicción en base al modelo ("si" para continuar): ').lower()
     if not make_predict == 'si':
         exit(0)
 
     print('Comienzo de proceso de añadido manual de datos a la muestra: ')
-    new_row = []
-    for name in index_names:
-        if name == variable_to_predict:
+    sample_value = []
+    # Preguntamos por cada elemento menos por aquel a predecir
+    for i,name in enumerate(index_names):
+        if i == pos_of_variable_to_predict:
             continue
-        nuevo_valor = input(f'\tValor para la variable {name}: ')
-        new_row.append(nuevo_valor)
+        # Extraemos del dataset las opciones para verificar la respuesta
+        answers = get_posible_answers(i, examples_names)
+        nuevo_valor = None
+        while nuevo_valor not in answers:
+            nuevo_valor = input(f'\tValor para la variable {name} ({answers}): ')
+        sample_value.append(nuevo_valor)
+    # Devolvemos la prediccion
+    return predict(built_tree=built_tree, attributes=index_names, sample=sample_value)
 
-    return predict(built_tree, index_names, new_row)
+def get_posible_answers(index, values_matrix):
+    answers = [row[index] for row in values_matrix[:]]
+    return list(set(answers))
 
+# Método de prediccion que itera por el árbol construido
 def predict(built_tree, attributes, sample):
+    # Sacamos el nodo padre
     current_node = list(built_tree.nodes)[0]  # Suponemos que el primer nodo es la raíz
 
+    # Vamos comparando cualidades
     while current_node in attributes:  # Mientras no sea un nodo hoja
         attr_index = attributes.index(current_node)
         sample_value = sample[attr_index]
@@ -167,8 +197,12 @@ def predict(built_tree, attributes, sample):
         if not found:
             return "No se puede determinar la clase (valor desconocido en el árbol)"
 
-    return current_node  # El nodo actual debe ser una hoja con la predicción
 
+    # El nodo actual debe ser una hoja con la predicción
+    # Aprovechamos y limpiamos la "chapuza" de antes
+    return current_node.replace('‎', '')
+
+# Esto es un código que te permite correrlo en la terminal si así lo gustas
 if __name__ == '__main__':
     # Leemos atributos y los ejemplos proporcionados (material de entreno)
     attributes_names = read_file("AtributosJuego.txt", ",")
@@ -190,13 +224,12 @@ if __name__ == '__main__':
     if tree.number_of_nodes() <= 0:
         print('Error de creación del árbol: árbol vacío')
         exit(1)
-
     # Si el id3 se creó correctamente, lo mostramos...
     show_tree(tree)
 
     # Y procedemos a preguntar las predicciones
     while True:
-        prediction = ask_if_prediction_and_predict(attributes_names, attributes_names[-1], tree)
+        prediction = ask_if_prediction_and_predict(index_names=attributes_names, pos_of_variable_to_predict=k_pos,
+                                                   built_tree=tree, examples_names=example_names)
         print()
         print(f'El modelo ha predicho: {prediction}')
-
