@@ -1,3 +1,14 @@
+# **********************************************
+# **Author:** Jaime Alonso Fernández
+# **Date:** - 27-03-2025
+#
+# **Universidad Complutense de Madrid**
+#
+# **Grado en Ingeniería del Software (Plan 2019)**
+#
+# **Ingeniería del Conocimiento**
+# **********************************************
+
 import tkinter as tk
 from tkinter import ttk, messagebox
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
