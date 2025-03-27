@@ -1,6 +1,6 @@
 # **********************************************
 # **Author:** Jaime Alonso Fernández
-# **Date:** - 20-03-2025
+# **Date:** - 27-03-2025
 #
 # **Universidad Complutense de Madrid**
 #
@@ -14,11 +14,15 @@ import networkx as nx # Para el árbol
 import matplotlib.pyplot as plt # Para el plot
 import math
 
-total_si_no = 0
+# Esto es una constante para un "engaño" que he tenido que llevar a cabo para el plot de los nodos
+global_counter = 0
 
+# Método sencillo que lee desde el archivo proporcionado el texto de entreno
 def read_file(filepath, separator) -> []:
+    # Usamos un try catch por posibles errores (gracias open)
     try:
         file_values = []
+        # Abrimos de lectura
         with open(filepath, 'r') as file:
             for line in file:
                 # Borramos el fin de línea en caso de que lo tenga
@@ -42,108 +46,157 @@ def read_file(filepath, separator) -> []:
 
         return None
 
-
-def run_id3(attributes:[], examples: [], tree, edge_name=None, parent=None):
-    global total_si_no
-    all_same, label = get_all_same_sign(examples)
+def run_id3(attributes, examples, result_tree, key_positive, key_position:int, edge_name=None, parent=None):
+    # Importamos la variable del contador
+    global global_counter
+    # Miramos si son todos los elementos iguales
+    all_same, leaf_label = get_all_same_sign(examples, key_position)
+    # De ser todos iguales creamos un nodo con el valor obtenido
     if all_same:
-        leaf_label = "si" if examples[0][-1] == "si" else "no"
-        leaf_label =total_si_no*' ' + leaf_label + total_si_no * ' '
-        total_si_no += 1
-        tree.add_edge(parent, leaf_label)
-        tree[parent][leaf_label]['name'] = edge_name
+        if not any(result_tree.has_edge(parent, node) and node == leaf_label for node in result_tree.successors(parent)):
+            # Le añadimos caracteres vacios alrededor para que mantengan el mismo display pero no se conecten los nodos
+            # La variable global sirve para evitar repeticiones futuras
+            leaf_label = '‎'*global_counter+leaf_label+'‎'*global_counter
+            global_counter += 1
+            # Añadimos el edge y le asignamos un nombre
+            result_tree.add_edge(parent, leaf_label)
+            result_tree[parent][leaf_label]['name'] = edge_name
         return
+    # Al no ser todos iguales
+    # Calculamos los méritos
+    summary_dict = get_attributes_probabilities(attributes=attributes, examples=examples, key_positive=key_positive,
+                                                key_position=key_position)
 
-    summary_dict = get_attributes_probabilities(attributes, examples)
-
-    iterable = [attr for attr in summary_dict if attr != 'Jugar']
+    iterable = [attr for i, attr in enumerate(summary_dict) if i != key_position]
     if not iterable:
         return
+
     lower_merit_attribute = min(iterable, key=lambda attr: summary_dict[attr]['merit'])
     index = attributes.index(lower_merit_attribute)
-
-    tree.add_node(lower_merit_attribute)
+    result_tree.add_node(lower_merit_attribute)
 
     if edge_name is not None:
-        tree.add_edge(parent, lower_merit_attribute)
-        tree[parent][lower_merit_attribute]['name'] = edge_name
+        result_tree.add_edge(parent, lower_merit_attribute)
+        result_tree[parent][lower_merit_attribute]['name'] = edge_name
 
     new_attributes = [attr for i, attr in enumerate(attributes) if i != index]
     for option in summary_dict[lower_merit_attribute]['options']:
         new_examples = [row[:index] + row[index+1:] for row in examples if row[index] == option]
-        run_id3(new_attributes, new_examples, tree, option, lower_merit_attribute)
+        run_id3(attributes=new_attributes, examples=new_examples, result_tree=result_tree,  key_positive=key_positive,
+                key_position=key_position-1, edge_name=option, parent=lower_merit_attribute)
 
-
-def get_all_same_sign(example:[]) -> (bool, str):
+# Método para saber si los elementos de la tabla tienen como atributo objetivo el mismo
+def get_all_same_sign(example, key_position):
+    # Caso extremo de error donde example no existe (no se va a ha dar con el modelo proporcionado)
     if not example:
-        return False, 'no'
-    value_to_count = example[0][-1]
-    value_count = sum(1 for row in example if row[-1] == value_to_count)
-    return len(example) == value_count, value_count
+        exit(2)
+    # Obtenemos el valor de la primera fila
+    value_to_count = example[0][key_position]
+    # Contamos cuantos de los valores concuerdan con el valor de la primera
+    value_count = sum(1 for row in example if row[key_position] == value_to_count)
+    # Y devolvemos si los contados son el mismo número que los totales
+    return len(example) == value_count, value_to_count
 
-def safe_log2(x):
-    return math.log2(x) if x > 0 else 0
-
-# Creamos un set que permite obtener el número de respuestas únicas para cada atributo
-def get_attributes_probabilities(attributes: [], examples: [[]]) -> dict:
+# Método que calcula las variables p, n, r y mérito y almacena la última en el diccionario
+def get_attributes_probabilities(attributes, examples, key_position:int, key_positive):
     result = {}
+    # Por cada uno de los atributos de la lista creamos una entrada en el diccionario
     for i, attribute in enumerate(attributes):
-        result[attribute] = {}
-        result[attribute]['options'] = list(set(row[i] for row in examples))
-        result[attribute]['P_values'] = {}
-        result[attribute]['N_values'] = {}
-        result[attribute]['R_values'] = {}
-
+        result[attribute] = {'options': list(set(row[i] for row in examples))}
         merit = 0
+        # Por cada entrada del atributo seleccionado
         for j, option in enumerate(result[attribute]['options']):
-            positive_value_name = f'P{j}'
-            negative_value_name = f'N{j}'
-            r_value_name = f'R{j}'
-            information_name = f'information'
-
+            # Esto sería 'n'
             total_element_count = sum(1 for row in examples if row[i] == option)
-            p_count = sum(1 for row in examples if row[i] == option and row[-1] == 'si')
-
-            p_value = p_count / total_element_count
-            n_value = (total_element_count - p_count) / total_element_count
+            # Contamos los valores positivos
+            p_count = sum(1 for row in examples if row[i] == option and row[key_position] == key_positive)
+            # Sacamos la fracción (p valor)
+            p_value = p_count / total_element_count if total_element_count else 0
+            # La inversa será entonces el n valor
+            n_value = (total_element_count - p_count) / total_element_count if total_element_count else 0
+            # Sacamos r
             r_value = total_element_count / len(examples)
-
-            merit += r_value * (-p_value * safe_log2(p_value) - n_value * safe_log2(n_value))
-
-            result[attribute]['P_values'][positive_value_name] = p_value
-            result[attribute]['N_values'][negative_value_name] = n_value
-            result[attribute]['R_values'][r_value_name] = r_value
-
+            # Hacemos el cálculo del mérito
+            merit += r_value * (-p_value * math.log2(p_value) if p_value else 0 - n_value * math.log2(n_value) if n_value else 0)
+        # Guardamos el mérito en el diccionario
         result[attribute]['merit'] = merit
+    # Devolvemos el diccionario
     return result
 
-def show_tree(graph: nx.DiGraph):
+
+def show_tree(graph):
     plt.figure(figsize=(10, 6))
-
-    # Usamos Graphviz para darle forma de árbol
     pos = nx.nx_agraph.graphviz_layout(graph, prog="dot")
-
-    # Dibujamos el grafo con nodos y aristas
     nx.draw(graph, pos, with_labels=True, node_color="skyblue", node_size=3000, font_size=10, edge_color="gray")
-
-    # Agregamos etiquetas a las aristas
     edge_labels = {(u, v): d['name'] for u, v, d in graph.edges(data=True)}
     nx.draw_networkx_edge_labels(graph, pos, edge_labels=edge_labels, font_size=9)
-
     plt.show()
 
 
+def ask_if_prediction_and_predict(index_names, variable_to_predict, built_tree):
+    print('*************************************************')
+    make_predict = input('Deseas hacer una predicción en base al modelo ("si" para continuar): ').lower()
+    if not make_predict == 'si':
+        exit(0)
+
+    print('Comienzo de proceso de añadido manual de datos a la muestra: ')
+    new_row = []
+    for name in index_names:
+        if name == variable_to_predict:
+            continue
+        nuevo_valor = input(f'\tValor para la variable {name}: ')
+        new_row.append(nuevo_valor)
+
+    return predict(built_tree, index_names, new_row)
+
+def predict(built_tree, attributes, sample):
+    current_node = list(built_tree.nodes)[0]  # Suponemos que el primer nodo es la raíz
+
+    while current_node in attributes:  # Mientras no sea un nodo hoja
+        attr_index = attributes.index(current_node)
+        sample_value = sample[attr_index]
+
+        # Buscar la rama que corresponde al valor del atributo
+        found = False
+        for child in built_tree.successors(current_node):
+            if built_tree[current_node][child]['name'] == sample_value:
+                current_node = child
+                found = True
+                break
+
+        if not found:
+            return "No se puede determinar la clase (valor desconocido en el árbol)"
+
+    return current_node  # El nodo actual debe ser una hoja con la predicción
+
 if __name__ == '__main__':
-    print("I am main")
+    # Leemos atributos y los ejemplos proporcionados (material de entreno)
     attributes_names = read_file("AtributosJuego.txt", ",")
     example_names = read_file("Juego.txt", ",")
+    pos_value = 'si' # Este es el valor que consideramos como bueno
+    k_pos = len(example_names[0]) - 1 # Para el caso específico, es la última columna
 
+    # Verificamos que hayan sido leídos correctamente
+    if not attributes_names or not example_names:
+        print('Ha habido un error leyendo los archivos de entreno.')
+        exit(1)
+
+    # Como todo ha salido bien, procedemos a crear el árbol
     tree = nx.DiGraph()
-    run_id3(attributes_names, example_names, tree=tree)
+    # Y construímos el modelo id3
+    run_id3(attributes=attributes_names, examples=example_names, result_tree=tree, key_positive=pos_value, key_position=k_pos)
 
-    if tree.number_of_nodes() > 0:  # Solo mostrar si hay nodos en el árbolE
-        for branch in tree.edges(data=True):
-            print(branch)
-        show_tree(tree)
-    else:
-        print("El árbol está vacío, no se mostrará el gráfico.")
+    # Verificamos que todo se cree correctamente
+    if tree.number_of_nodes() <= 0:
+        print('Error de creación del árbol: árbol vacío')
+        exit(1)
+
+    # Si el id3 se creó correctamente, lo mostramos...
+    show_tree(tree)
+
+    # Y procedemos a preguntar las predicciones
+    while True:
+        prediction = ask_if_prediction_and_predict(attributes_names, attributes_names[-1], tree)
+        print()
+        print(f'El modelo ha predicho: {prediction}')
+
