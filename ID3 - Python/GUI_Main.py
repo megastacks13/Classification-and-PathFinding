@@ -235,7 +235,7 @@ class DecisionTreeApp:
             sample.append(value)
 
         try:
-            prediction_value = predict(self.tree, self.attributes_names, sample)
+            prediction_value = predict(self.tree, self.attributes_names, sample, self.k_pos, self.example_names)
             messagebox.showinfo(
                 "Resultado de Predicción",
                 f"El modelo ha predicho: {prediction_value}\n\n" +

@@ -13,6 +13,7 @@
 import networkx as nx # Para el árbol
 import matplotlib.pyplot as plt # Para el plot
 import math # Para los logaritmos del mérito
+from collections import Counter
 
 # Esto es una constante para un "engaño" que he tenido que llevar a cabo para el plot de los nodos
 global_counter = 0
@@ -46,54 +47,94 @@ def read_file(filepath, separator) -> []:
 
         return None
 
-def run_id3(attributes, examples, result_tree, key_positive, key_position:int, edge_name=None, parent=None):
-    # Importamos la variable del contador
-    global global_counter
-    # Miramos si son todos los elementos iguales
-    all_same, leaf_label = get_all_same_sign(examples, key_position)
-    # De ser todos iguales creamos un nodo con el valor obtenido
-    if all_same:
-        if not any(result_tree.has_edge(parent, node) and node == leaf_label for node in result_tree.successors(parent)):
-            # Le añadimos caracteres vacíos alrededor para que mantengan el mismo display, pero no se conecten los nodos
-            # La variable global sirve para evitar repeticiones futuras
-            leaf_label = '‎'*global_counter+leaf_label+'‎'*global_counter
-            global_counter += 1
-            # Añadimos el edge y le asignamos un nombre
-            result_tree.add_edge(parent, leaf_label)
-            result_tree[parent][leaf_label]['name'] = edge_name
-        return
-    # Al no ser todos iguales
-    # Calculamos los méritos
-    summary_dict = get_attributes_probabilities(attributes=attributes, examples=examples, key_positive=key_positive,
-                                                key_position=key_position)
 
-    # Creamos una lista iterable que contiene todos los valores salvo el valor key
-    iterable = [attr for i, attr in enumerate(summary_dict) if i != key_position]
-    # De ser key el único valor de la lista, devolvemos
+def run_id3(attributes, examples, result_tree, key_positive, key_position: int, edge_name=None, parent=None):
+    global global_counter
+
+    # Caso base: si no hay ejemplos, retornar
+    if not examples:
+        return
+
+    # Verificar si todos los ejemplos tienen la misma clasificación
+    all_same, leaf_label = get_all_same_sign(examples, key_position)
+    if all_same:
+        if parent is not None:  # Solo añadir hoja si hay un padre
+            if not any(result_tree.has_edge(parent, node) and node == leaf_label for node in
+                       result_tree.successors(parent)):
+                leaf_label = f"{leaf_label}_{global_counter}"  # Mejor alternativa a caracteres especiales
+                global_counter += 1
+                result_tree.add_edge(parent, leaf_label)
+                if edge_name is not None:
+                    result_tree[parent][leaf_label]['name'] = edge_name
+        return  # Importante: retornar aquí
+
+    # Si no hay atributos para dividir (excepto el target), crear nodo hoja con mayoría
+    if len(attributes) <= 1:
+        majority_label = get_majority_label(examples, key_position)
+        if parent is not None:
+            result_tree.add_edge(parent, majority_label)
+            if edge_name is not None:
+                result_tree[parent][majority_label]['name'] = edge_name
+        return
+
+    # Calcular el mejor atributo para dividir
+    summary_dict = get_attributes_probabilities(attributes=attributes, examples=examples,
+                                                key_positive=key_positive, key_position=key_position)
+
+    # Excluir el atributo target de la división
+    iterable = [attr for attr in summary_dict if attr != attributes[key_position]]
     if not iterable:
         return
 
-    # Tomamos el atributo del diccionario con menor valor y sacamos su índice en la lista actual
     lower_merit_attribute = min(iterable, key=lambda attr: summary_dict[attr]['merit'])
+    new_node_name = f"{lower_merit_attribute}_{global_counter}"
+    global_counter += 1
     index = attributes.index(lower_merit_attribute)
-    # Añadimos el nodo al árbol
-    result_tree.add_node(lower_merit_attribute)
 
-    # En caso de que no tenga ningún padre, edge name es None, entonces no se añade edge
-    if edge_name is not None:
-        result_tree.add_edge(parent, lower_merit_attribute)
-        result_tree[parent][lower_merit_attribute]['name'] = edge_name
+    # Añadir el nuevo nodo al árbol
+    result_tree.add_node(new_node_name)
+    if parent is not None and edge_name is not None:
+        result_tree.add_edge(parent, new_node_name)
+        result_tree[parent][new_node_name]['name'] = edge_name
 
-    # Establecemos los nuevos atributos como todos los anteriores salvo aquel elegido
-    new_attributes = [attr for i, attr in enumerate(attributes) if i != index]
-    # Actualizamos el key position
-    new_key_position = new_attributes.index(attributes[key_position])
+    # Preparar para la recursión
+    new_attributes = [attr for attr in attributes if attr != lower_merit_attribute]
+    try:
+        new_key_position = new_attributes.index(attributes[key_position])
+    except ValueError:
+        new_key_position = -1  # En caso de que el atributo target haya sido eliminado
+
     for option in summary_dict[lower_merit_attribute]['options']:
-        # Hacemos lo mismo con los ejemplos
-        new_examples = [row[:index] + row[index+1:] for row in examples if row[index] == option]
-        # Y por cada ejemplo del tipo elegido, volvemos a calcular el id3
-        run_id3(attributes=new_attributes, examples=new_examples, result_tree=result_tree,  key_positive=key_positive,
-                key_position=new_key_position, edge_name=option, parent=lower_merit_attribute)
+        new_examples = [row[:index] + row[index + 1:] for row in examples if row[index] == option]
+        if not new_examples:
+            # Añadir nodo hoja para opción sin ejemplos
+            majority_label = get_majority_label(examples, key_position)
+            leaf_name = f"{majority_label}_{global_counter}"
+            global_counter += 1
+            result_tree.add_edge(new_node_name, leaf_name)
+            result_tree[new_node_name][leaf_name]['name'] = option
+            continue
+
+        run_id3(attributes=new_attributes, examples=new_examples, result_tree=result_tree,
+                key_positive=key_positive, key_position=new_key_position,
+                edge_name=option, parent=new_node_name)
+
+
+
+def get_majority_label(examples, key_position):
+    if not examples:
+        return None
+
+    # Contar frecuencia de cada etiqueta
+    label_counts = {}
+    for example in examples:
+        label = example[key_position]
+        label_counts[label] = label_counts.get(label, 0) + 1
+
+    # Encontrar la etiqueta con mayor frecuencia
+    majority_label = max(label_counts.items(), key=lambda x: x[1])[0]
+
+    return majority_label
 
 # Método para saber si los elementos de la tabla tienen como atributo objetivo el mismo
 def get_all_same_sign(example, key_position):
@@ -170,23 +211,48 @@ def ask_if_prediction_and_predict(index_names, pos_of_variable_to_predict, built
             nuevo_valor = input(f'\tValor para la variable {name} ({answers}): ')
         sample_value.append(nuevo_valor)
     # Devolvemos la prediccion
-    return predict(built_tree=built_tree, attributes=index_names, sample=sample_value)
+    return predict(built_tree=built_tree, attributes=index_names, sample=sample_value, key_position=k_pos, example=examples_names)
 
 def get_posible_answers(index, values_matrix):
     answers = [row[index] for row in values_matrix[:]]
     return list(set(answers))
 
 # Método de prediccion que itera por el árbol construido
-def predict(built_tree, attributes, sample):
-    # Sacamos el nodo padre
-    current_node = list(built_tree.nodes)[0]  # Suponemos que el primer nodo es la raíz
+def predict(built_tree, attributes, sample, key_position, example):
+    # Obtenemos el nodo raíz (el que no tiene predecesores)
+    root_nodes = [node for node in built_tree.nodes() if built_tree.in_degree(node) == 0]
+    if not root_nodes:
+        return "Árbol no válido: no se encontró nodo raíz"
 
-    # Vamos comparando cualidades
-    while current_node in attributes:  # Mientras no sea un nodo hoja
-        attr_index = attributes.index(current_node)
+    current_node = root_nodes[0]
+
+    # Obtenemos todas las posibles etiquetas finales
+    final_values = set(row[key_position] for row in example)
+
+    while True:
+        # Si llegamos a un nodo que es una etiqueta final (limpiamos el sufijo numérico si existe)
+        clean_node = current_node.split('_')[0]  # Eliminamos el sufijo _numero si existe
+        if clean_node in final_values:
+            return clean_node
+
+        # Verificamos si el nodo actual es un atributo que tenemos en nuestra muestra
+        attr_name = current_node.split('_')[0]  # Eliminamos el sufijo numérico para comparar
+        if attr_name not in attributes:
+            return "No se puede determinar la clase (nodo no reconocido)"
+
+        # Obtenemos el índice del atributo en la lista original
+        try:
+            attr_index = attributes.index(attr_name)
+        except ValueError:
+            return "No se puede determinar la clase (atributo no encontrado)"
+
+        # Verificamos que el índice sea válido para la muestra
+        if attr_index >= len(sample):
+            return "No se puede determinar la clase (índice de atributo inválido)"
+
         sample_value = sample[attr_index]
 
-        # Buscar la rama que corresponde al valor del atributo
+        # Buscamos la rama que corresponde al valor del atributo
         found = False
         for child in built_tree.successors(current_node):
             if built_tree[current_node][child]['name'] == sample_value:
@@ -195,18 +261,15 @@ def predict(built_tree, attributes, sample):
                 break
 
         if not found:
-            return "No se puede determinar la clase (valor desconocido en el árbol)"
-
-
-    # El nodo actual debe ser una hoja con la predicción
-    # Aprovechamos y limpiamos la "chapuza" de antes
-    return current_node.replace('‎', '')
+            # Si no encontramos una rama, devolvemos la clase mayoritaria de los ejemplos
+            majority_label = get_majority_label(example, key_position)
+            return majority_label if majority_label else "No se puede determinar la clase"
 
 # Esto es un código que te permite correrlo en la terminal si así lo gustas
 if __name__ == '__main__':
     # Leemos atributos y los ejemplos proporcionados (material de entreno)
-    attributes_names = read_file("AtributosJuego.txt", ",")
-    example_names = read_file("Juego.txt", ",")
+    attributes_names = read_file("AtributosJuego3.txt", ",")
+    example_names = read_file("Juego3.txt", ",")
     pos_value = 'si' # Este es el valor que consideramos como bueno
     k_pos = len(example_names[0]) - 1 # Para el caso específico, es la última columna
 

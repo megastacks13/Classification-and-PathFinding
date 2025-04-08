@@ -1,0 +1,9 @@
+soleado,caluroso,no
+nublado,caluroso,si
+lluvioso,caluroso,si
+soleado,templado,si
+nublado,templado,si
+lluvioso,templado,no
+soleado,frio,si
+nublado,frio,no
+lluvioso,frio,no
