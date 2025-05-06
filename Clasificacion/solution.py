@@ -1,6 +1,8 @@
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.patches import Ellipse
 import numpy as np
-import math
-from collections import defaultdict
+from Graph import ClusterVisualizer
 
 
 class DataLoader:
@@ -54,7 +56,7 @@ class FuzzyCMeans:
                            [6.8, 3.4, 4.6, 0.7]])
 
     def _calculate_membership(self, data):
-        # Calcular distancias euclideas entre cada punto y cada centro
+        # Calcular distancias euclídeas entre cada punto y cada centro
         distances = np.zeros((self.N, self.C))
         for i in range(self.C):
             distances[:, i] = np.linalg.norm(data - self.V[i], axis=1)
@@ -133,12 +135,13 @@ class FuzzyCMeans:
         return self.V
 
 
+
 class BayesClassifier:
     def __init__(self):
         self.classes = None
         self.class_priors = None
         self.means = None
-        self.variances = None
+        self.covariances = None
 
     def _fit(self, data, labels):
         self.classes = np.unique(labels)
@@ -146,50 +149,50 @@ class BayesClassifier:
         n_features = data.shape[1]
 
         self.means = np.zeros((n_classes, n_features))
-        self.variances = np.zeros((n_classes, n_features))
+        self.covariances = []
         self.class_priors = np.zeros(n_classes)
 
         for i, c in enumerate(self.classes):
             class_data = data[labels == c]
             self.means[i, :] = np.mean(class_data, axis=0)
-            self.variances[i, :] = np.var(class_data, axis=0)
+            # Covarianza (con bias corregido)
+            cov_matrix = np.cov(class_data, rowvar=False)
+            self.covariances.append(cov_matrix)
             self.class_priors[i] = class_data.shape[0] / data.shape[0]
 
-    def _gaussian_prob(self, x, mean, var):
-        # Función de densidad de probabilidad gaussiana
-        exponent = np.exp(-((x - mean) ** 2) / (2 * var))
-        return (1 / np.sqrt(2 * np.pi * var)) * exponent
+    def _multivariate_gaussian(self, x, mean, cov):
+        n = len(mean)
+        cov_inv = np.linalg.pinv(cov)  # Mejor que inv por estabilidad numérica
+        diff = x - mean
+        exponent = -0.5 * np.dot(diff.T, np.dot(cov_inv, diff))
+        denom = np.sqrt(((2 * np.pi) ** n) * np.linalg.det(cov))
+        return np.exp(exponent) / denom
 
     def predict(self, filepath):
         loader = DataLoader(filepath)
         predict_data, labels, real_data_class = loader.load_data()
+        x = predict_data[0]
+
         posteriors = []
 
         for i, c in enumerate(self.classes):
             prior = np.log(self.class_priors[i])
-            likelihood = np.sum(np.log(self._gaussian_prob(predict_data, self.means[i], self.variances[i])))
+            likelihood = np.log(self._multivariate_gaussian(x, self.means[i], self.covariances[i]))
             posterior = prior + likelihood
             posteriors.append(posterior)
 
-        # Devolver el cluster con mayor pertenencia
         max_val = np.argmax(posteriors)
         predicted_class = self.classes[max_val]
-        return max_val, predicted_class, real_data_class[0], posteriors, predict_data[0]
-
+        return max_val, predicted_class, real_data_class[0], posteriors, x
 
     def algorithm(self, filepath):
-        # Cargar datos
         loader = DataLoader(filepath)
         data, labels, classes = loader.load_data()
         labels = np.array(labels)
-
-        # Almacenamos la lista de las clases para la predicción
         self.classes = classes
-
-        # Ajustar el modelo
         self._fit(data, labels)
+        return self.means, self.covariances, self.class_priors
 
-        return self.means, self.variances, self.class_priors
 
 
 class LloydAlgorithm:
@@ -204,13 +207,9 @@ class LloydAlgorithm:
 
     def _initialize_centers(self, data):
         # Inicialización con los valores sugeridos en el apéndice
-        if self.n_clusters == 2:
-            self.centers = np.array([[4.6, 3.0, 4.0, 0.0],
-                                     [6.8, 3.4, 4.6, 0.7]])
-        else:
-            # Inicialización aleatoria si no son 2 clusters
-            idx = np.random.choice(data.shape[0], self.n_clusters, replace=False)
-            self.centers = data[idx]
+        self.centers = np.array([[4.6, 3.0, 4.0, 0.0],
+                                 [6.8, 3.4, 4.6, 0.7]])
+
 
     def _assign_clusters(self, data):
         distances = np.zeros((data.shape[0], self.n_clusters))
@@ -273,11 +272,15 @@ class LloydAlgorithm:
 
         return self.centers
 
-def run_fuzzy_means():
+def run_fuzzy_means(filepath):
     print("========================> Agrupamiento borroso (K-medias) ========>")
 
     # Crear instancia del algoritmo con valores por defecto
     fcm = FuzzyCMeans()
+    visualizer = ClusterVisualizer()
+    # Load all data for visualization
+    loader = DataLoader('Iris2Clases.txt')
+    all_data, _, _ = loader.load_data()
 
     # Cargar datos y ejecutar algoritmo
     centers = fcm.algorithm('Iris2Clases.txt')
@@ -287,75 +290,63 @@ def run_fuzzy_means():
     print(f"\t Clúster 1: {centers[1]}")
 
     # Predecir una muestra de prueba 1
-    cluster, cluster_name, real_class, distances, data = fcm.predict('TestIris01.txt')
+    cluster, cluster_name, real_class, distances, data = fcm.predict(filepath)
     print(f"\nPrediciendo datos {data}:")
     print(f"\tDistancia al clúster 0: {distances[0]}")
     print(f"\tDistancia al clúster 1: {distances[1]}")
     print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 1 pertenece a la clase '{cluster_name}' y debía ser de clase '{real_class}'.")
+    print(f"\nLa muestra pertenece a la clase '{cluster_name}' y debía ser de clase '{real_class}'.")
     print()
 
-    # Predecir una muestra de prueba 2
-    cluster, cluster_name, real_class, distances, data = fcm.predict('TestIris02.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tDistancia al clúster 0: {distances[0]}")
-    print(f"\tDistancia al clúster 1: {distances[1]}")
-    print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 2 pertenece a la clase '{cluster_name}' y debía ser de clase '{real_class}'.")
-    print()
+    # Visualize
+    visualizer.visualize("Fuzzy C-Means", centers, all_data, data, cluster)
+    visualizer.show()
 
-    # Predecir una muestra de prueba 3
-    cluster, cluster_name, real_class, distances, data = fcm.predict('TestIris03.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tDistancia al clúster 0: {distances[0]}")
-    print(f"\tDistancia al clúster 1: {distances[1]}")
-    print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 3 pertenece a la clase '{cluster_name}' y debía ser de clase '{real_class}'.")
-    print()
-
-def run_bayes_parametric_estimation():
+def run_bayes_parametric_estimation(filepath):
     print("========================> Estimación paramétrica (Bayes) ========>")
     # Crear instancia del algoritmo con valores por defecto
     bcf = BayesClassifier()
 
-    means, variances, class_priors = bcf.algorithm('Iris2Clases.txt')
+    visualizer = ClusterVisualizer()
+
+    # Load all data for visualization
+    loader = DataLoader('Iris2Clases.txt')
+    all_data, _, _ = loader.load_data()
+
+    means, covariances, class_priors = bcf.algorithm('Iris2Clases.txt')
     print("\nModelo entrenado con éxito")
     print("\nMedias finales:")
     print(f"\tClúster 0: {means[0]}")
     print(f"\tClúster 1: {means[1]}")
 
-    print("\nVarianzas finales:")
-    print(f"\tClúster 0: {variances[0]}")
-    print(f"\tClúster 1: {variances[1]}")
+    print("\nCovarianzas finales:")
+    print(f"\tClúster 0:")
+    print(covariances[0])
+    print(f"\tClúster 1:")
+    print(covariances[1])
 
     # Predecir una muestra de prueba 1
-    cluster, cluster_name, real_class, posteriors, data = bcf.predict('TestIris01.txt')
+    cluster, cluster_name, real_class, posteriors, data = bcf.predict(filepath)
     print(f"\nPrediciendo datos {data}:")
     print(f"\tPosteriors: {posteriors}")
     print(f"\tPosición 'Posterior' máximo (equivalente al cluster correcto): clúster {cluster}")
-    print(f"\nLa muestra 1 pertenece a la clase `{cluster_name}` y debía ser de clase '{real_class}'.")
+    print(f"\nLa muestra pertenece a la clase `{cluster_name}` y debía ser de clase '{real_class}'.")
     print()
 
-    # Predecir una muestra de prueba 1
-    cluster, cluster_name, real_class, posteriors, data = bcf.predict('TestIris02.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tPosteriors: {posteriors}")
-    print(f"\tPosición 'Posterior' máximo (equivalente al cluster correcto): clúster {cluster}")
-    print(f"\nLa muestra 2 pertenece a la clase `{cluster_name}` y debía ser de clase '{real_class}'.")
-    print()
+    # Visualize
+    visualizer.visualize("Bayes", means, all_data, data, cluster)
+    visualizer.show()
 
-    # Predecir una muestra de prueba 1
-    cluster, cluster_name, real_class, posteriors, data = bcf.predict('TestIris03.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tPosteriors: {posteriors}")
-    print(f"\tPosición 'Posterior' máximo (equivalente al cluster correcto): clúster {cluster}")
-    print(f"\nLa muestra 1 pertenece a la clase `{cluster_name}` y debía ser de clase '{real_class}'.")
-    print()
-
-def run_lloyd_algorithm():
+def run_lloyd_algorithm(filepath):
     print("========================> Algoritmo de Lloyd ========>")
     # Crear instancia del algoritmo con valores por defecto
     lla = LloydAlgorithm()
+
+    visualizer = ClusterVisualizer()
+
+    # Load all data for visualization
+    loader = DataLoader('Iris2Clases.txt')
+    all_data, _, _ = loader.load_data()
 
     # Cargar datos y ejecutar algoritmo
     centers = lla.algorithm('Iris2Clases.txt')
@@ -365,33 +356,25 @@ def run_lloyd_algorithm():
     print(f"\t Clúster 1: {centers[1]}")
 
     # Predecir una muestra de prueba 1
-    cluster, cluster_name, real_class, distances, data = lla.predict('TestIris01.txt')
+    cluster, cluster_name, real_class, distances, data = lla.predict(filepath)
     print(f"\nPrediciendo datos {data}:")
     print(f"\tDistancia al clúster 0: {distances[0]}")
     print(f"\tDistancia al clúster 1: {distances[1]}")
     print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 1 pertenece al cluster '{cluster_name}' y debía ser de clase '{real_class}'.")
+    print(f"\nLa muestra pertenece al cluster '{cluster_name}' y debía ser de clase '{real_class}'.")
     print()
 
-    # Predecir una muestra de prueba 2
-    cluster, cluster_name, real_class, distances, data = lla.predict('TestIris02.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tDistancia al clúster 0: {distances[0]}")
-    print(f"\tDistancia al clúster 1: {distances[1]}")
-    print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 2 pertenece al cluster '{cluster_name}' y debía ser de clase '{real_class}'.")
-    print()
-
-    # Predecir una muestra de prueba 3
-    cluster, cluster_name, real_class, distances, data = lla.predict('TestIris03.txt')
-    print(f"\nPrediciendo datos {data}:")
-    print(f"\tDistancia al clúster 0: {distances[0]}")
-    print(f"\tDistancia al clúster 1: {distances[1]}")
-    print(f"\tClúster a menor distancia: clúster {cluster}")
-    print(f"\nLa muestra 3 pertenece al cluster '{cluster_name}' y debía ser de clase '{real_class}'.")
-    print()
+    # Visualize
+    visualizer.visualize("Lloyd Algorithm", centers, all_data, data, cluster)
+    visualizer.show()
 
 if __name__ == "__main__":
-     run_fuzzy_means()
-     run_bayes_parametric_estimation()
-     run_lloyd_algorithm()
+     run_fuzzy_means('TestIris01.txt')
+     run_fuzzy_means('TestIris02.txt')
+     run_fuzzy_means('TestIris03.txt')
+     run_bayes_parametric_estimation('TestIris01.txt')
+     run_bayes_parametric_estimation('TestIris02.txt')
+     run_bayes_parametric_estimation('TestIris03.txt')
+     run_lloyd_algorithm('TestIris01.txt')
+     run_lloyd_algorithm('TestIris02.txt')
+     run_lloyd_algorithm('TestIris03.txt')
